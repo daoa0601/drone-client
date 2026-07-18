@@ -4,10 +4,12 @@ import type {
   DroneProviderStatus,
   DronePublicOperation,
 } from "../src/index.js";
+import { APPLE_NATIVE_ATTESTATION_PROFILE } from "../src/index.js";
 
 export const ARTIFACT_SHA256 = "3c6a8279d628d16065388481df6c286915f0dbe13d6d73cb763a8ac729ecb362";
 export const ARTIFACT_ID = `sha256_${ARTIFACT_SHA256}`;
 export const JOB_ID = `job_${"b".repeat(32)}`;
+export const PROVIDER_ATTESTATION_ID = `attestation.sha256.${"c".repeat(64)}`;
 
 export function artifactMetadata(
   override: Partial<DroneArtifactMetadata> = {},
@@ -30,6 +32,15 @@ export function providerStatus(override: Partial<DroneProviderStatus> = {}): Dro
     installed: true,
     enabled: true,
     mutations_available: true,
+    attested: true,
+    attestation: {
+      attestation_id: PROVIDER_ATTESTATION_ID,
+      profile: APPLE_NATIVE_ATTESTATION_PROFILE,
+      key_id: `ed25519.sha256.${"d".repeat(64)}`,
+      issuer: "fixture-independent-attestor",
+      issued_at: "2026-07-18T08:00:00.000Z",
+      expires_at: "2026-07-25T08:00:00.000Z",
+    },
     reason: "ready",
     isolation: "lightweight_vm",
     guest_os: ["linux"],
@@ -89,6 +100,7 @@ export function job(override: Partial<DroneJob> = {}): DroneJob {
             finished_at: "2026-07-18T08:31:02.000Z",
             exit_code: 0,
             timed_out: false,
+            execution_attestation_artifact_id: ARTIFACT_ID,
           }
         : status === "failed"
           ? {
@@ -96,6 +108,7 @@ export function job(override: Partial<DroneJob> = {}): DroneJob {
               finished_at: "2026-07-18T08:31:02.000Z",
               exit_code: 1,
               timed_out: false,
+              execution_attestation_artifact_id: ARTIFACT_ID,
               error_code: "SANDBOX_EXIT_NONZERO",
             }
           : status === "cancelled" || status === "interrupted"
@@ -109,6 +122,7 @@ export function job(override: Partial<DroneJob> = {}): DroneJob {
     job_id: JOB_ID,
     operation_id: "pe.static_snapshot",
     provider_id: "apple_native",
+    provider_attestation_id: PROVIDER_ATTESTATION_ID,
     status,
     inputs: { sample: ARTIFACT_ID },
     outputs: [],

@@ -7,6 +7,7 @@ import {
   artifactMetadata,
   JOB_ID,
   job,
+  PROVIDER_ATTESTATION_ID,
   providerStatus,
   publicOperation,
 } from "./fixtures.js";
@@ -100,6 +101,7 @@ describe("DroneClient", () => {
         expect(JSON.parse(String(init.body))).toEqual({
           schema_version: "1",
           operation_id: "pe.static_snapshot",
+          provider_attestation_id: PROVIDER_ATTESTATION_ID,
           inputs: { sample: ARTIFACT_ID },
         });
         return json(job(), { status: 202 });
@@ -114,6 +116,7 @@ describe("DroneClient", () => {
       client.submitJob({
         schema_version: "1",
         operation_id: "pe.static_snapshot",
+        provider_attestation_id: PROVIDER_ATTESTATION_ID,
         inputs: { sample: ARTIFACT_ID },
       }),
     ).resolves.toEqual(job());
@@ -122,7 +125,12 @@ describe("DroneClient", () => {
     await expect(client.cancelJob(JOB_ID)).resolves.toEqual(job({ status: "cancelled" }));
     await expect(client.job("job_latest")).rejects.toMatchObject({ code: "INVALID_REQUEST" });
     await expect(
-      client.submitJob({ schema_version: "1", operation_id: "../escape", inputs: {} }),
+      client.submitJob({
+        schema_version: "1",
+        operation_id: "../escape",
+        provider_attestation_id: PROVIDER_ATTESTATION_ID,
+        inputs: {},
+      }),
     ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
   });
 
@@ -155,6 +163,7 @@ describe("DroneClient", () => {
       client(job({ inputs: {} })).submitJob({
         schema_version: "1",
         operation_id: "pe.static_snapshot",
+        provider_attestation_id: PROVIDER_ATTESTATION_ID,
         inputs: { sample: ARTIFACT_ID },
       }),
     ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });

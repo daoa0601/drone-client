@@ -1,6 +1,7 @@
 import { invalidRequest, invalidResponse } from "./errors.js";
 
 export const DRONE_PROTOCOL_VERSION = "1" as const;
+export const APPLE_NATIVE_ATTESTATION_PROFILE = "apple_native_no_network_vm_v1" as const;
 
 const MIB = 1024 * 1024;
 
@@ -78,6 +79,7 @@ export interface DronePublicOperation {
 export interface DroneJobSubmission {
   readonly schema_version: "1";
   readonly operation_id: string;
+  readonly provider_attestation_id: string;
   readonly inputs: Readonly<Record<string, string>>;
 }
 
@@ -102,6 +104,7 @@ export interface DroneJob {
   readonly job_id: string;
   readonly operation_id: string;
   readonly provider_id: string;
+  readonly provider_attestation_id: string;
   readonly status: DroneJobStatus;
   readonly inputs: Readonly<Record<string, string>>;
   readonly outputs: ReadonlyArray<DroneJobOutputArtifact>;
@@ -112,7 +115,17 @@ export interface DroneJob {
   readonly timed_out?: boolean;
   readonly stdout_artifact_id?: string;
   readonly stderr_artifact_id?: string;
+  readonly execution_attestation_artifact_id?: string;
   readonly error_code?: string;
+}
+
+export interface DroneProviderAttestationSummary {
+  readonly attestation_id: string;
+  readonly profile: typeof APPLE_NATIVE_ATTESTATION_PROFILE;
+  readonly key_id: string;
+  readonly issuer: string;
+  readonly issued_at: string;
+  readonly expires_at: string;
 }
 
 export interface DroneProviderStatus {
@@ -121,10 +134,35 @@ export interface DroneProviderStatus {
   readonly installed: boolean;
   readonly enabled: boolean;
   readonly mutations_available: boolean;
+  readonly attested: boolean;
+  readonly attestation?: DroneProviderAttestationSummary;
   readonly reason: string;
   readonly isolation: "lightweight_vm";
   readonly guest_os: ReadonlyArray<"linux">;
   readonly network_modes: ReadonlyArray<"none">;
+}
+
+export interface DroneExecutionAttestation {
+  readonly schema_version: "1";
+  readonly profile: typeof APPLE_NATIVE_ATTESTATION_PROFILE;
+  readonly provider_attestation_id: string;
+  readonly challenge: string;
+  readonly container_id: string;
+  readonly image_reference: string;
+  readonly backend: "apple_containerization";
+  readonly isolation: "lightweight_vm";
+  readonly guest_os: "linux";
+  readonly network_mode: "none";
+  readonly ephemeral_vm: true;
+  readonly read_only_root: true;
+  readonly input_disk_read_only: true;
+  readonly output_disk_bounded: true;
+  readonly host_directory_sharing: false;
+  readonly socket_sharing: false;
+  readonly nested_virtualization: false;
+  readonly non_root_required: true;
+  readonly no_new_privileges: true;
+  readonly capabilities: "none";
 }
 
 const SAFE_ID = /^[a-z][a-z0-9_.-]{0,127}$/u;
@@ -133,6 +171,12 @@ const SAFE_SLOT = /^[a-z][a-z0-9_-]{0,63}$/u;
 const ARTIFACT_ID = /^sha256_[a-f0-9]{64}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const JOB_ID = /^job_[a-f0-9]{32}$/u;
+const ATTESTATION_ID = /^attestation\.sha256\.[a-f0-9]{64}$/u;
+const ATTESTATION_KEY_ID = /^ed25519\.sha256\.[a-f0-9]{64}$/u;
+const ATTESTATION_CHALLENGE = /^[a-f0-9]{64}$/u;
+const CONTAINER_ID = /^drone-[a-f0-9]{24}$/u;
+const IMAGE_DIGEST =
+  /^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?\/)?[a-z0-9]+(?:[._/-][a-z0-9]+)*@sha256:[a-f0-9]{64}$/u;
 const MEDIA_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$/u;
 const ERROR_CODE = /^[A-Z][A-Z0-9_]{0,127}$/u;
 const UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
@@ -154,11 +198,26 @@ function object(value: unknown, label: string): UnknownRecord {
   return value as UnknownRecord;
 }
 
+function exactKeys(value: UnknownRecord, expected: ReadonlyArray<string>, label: string): void {
+  const actual = Object.keys(value).sort();
+  const allowed = [...expected].sort();
+  if (JSON.stringify(actual) !== JSON.stringify(allowed)) {
+    throw invalidResponse(`${label} does not match its strict schema.`);
+  }
+}
+
 function string(value: unknown, label: string, maximum = 2048): string {
   if (typeof value !== "string" || value.length === 0 || value.length > maximum) {
     throw invalidResponse(`${label} must be a non-empty bounded string.`);
   }
   return value;
+}
+
+function containsControl(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code < 32 || code === 127;
+  });
 }
 
 function boolean(value: unknown, label: string): boolean {
@@ -199,6 +258,20 @@ function safeSlot(value: unknown, label: string): string {
 function artifactId(value: unknown, label: string): string {
   if (typeof value !== "string" || !ARTIFACT_ID.test(value)) {
     throw invalidResponse(`${label} is not a content-addressed artifact ID.`);
+  }
+  return value;
+}
+
+function attestationId(value: unknown, label: string): string {
+  if (typeof value !== "string" || !ATTESTATION_ID.test(value)) {
+    throw invalidResponse(`${label} is not a provider attestation ID.`);
+  }
+  return value;
+}
+
+function attestationKeyId(value: unknown, label: string): string {
+  if (typeof value !== "string" || !ATTESTATION_KEY_ID.test(value)) {
+    throw invalidResponse(`${label} is not an Ed25519 attestation key ID.`);
   }
   return value;
 }
@@ -359,6 +432,7 @@ function validateJobState(job: DroneJob): void {
   const hasResult = hasExitCode && hasTimedOut;
   const hasCapturedStreams =
     job.stdout_artifact_id !== undefined || job.stderr_artifact_id !== undefined;
+  const hasExecutionAttestation = job.execution_attestation_artifact_id !== undefined;
   const hasError = job.error_code !== undefined;
 
   if (hasExitCode !== hasTimedOut) {
@@ -381,6 +455,7 @@ function validateJobState(job: DroneJob): void {
         hasFinished ||
         hasResult ||
         hasCapturedStreams ||
+        hasExecutionAttestation ||
         hasError ||
         job.outputs.length > 0
       ) {
@@ -393,6 +468,7 @@ function validateJobState(job: DroneJob): void {
         hasFinished ||
         hasResult ||
         hasCapturedStreams ||
+        hasExecutionAttestation ||
         hasError ||
         job.outputs.length > 0
       ) {
@@ -405,6 +481,7 @@ function validateJobState(job: DroneJob): void {
         !hasFinished ||
         job.exit_code !== 0 ||
         job.timed_out !== false ||
+        !hasExecutionAttestation ||
         hasError
       ) {
         throw invalidResponse("Succeeded job fields are inconsistent.");
@@ -417,13 +494,23 @@ function validateJobState(job: DroneJob): void {
       if (hasResult && (!hasStarted || (job.exit_code === 0 && job.timed_out === false))) {
         throw invalidResponse("Failed job result fields are inconsistent.");
       }
+      if (hasResult !== hasExecutionAttestation) {
+        throw invalidResponse("Failed job execution attestation is inconsistent.");
+      }
       if (!hasResult && (hasCapturedStreams || job.outputs.length > 0)) {
         throw invalidResponse("Failed job evidence requires process result fields.");
       }
       return;
     case "cancelled":
     case "interrupted":
-      if (!hasFinished || !hasError || hasResult || hasCapturedStreams || job.outputs.length > 0) {
+      if (
+        !hasFinished ||
+        !hasError ||
+        hasResult ||
+        hasCapturedStreams ||
+        hasExecutionAttestation ||
+        job.outputs.length > 0
+      ) {
         throw invalidResponse(`${job.status} job fields are inconsistent.`);
       }
   }
@@ -454,6 +541,10 @@ export function decodeDroneJobSubmission(value: unknown): DroneJobSubmission {
     return {
       schema_version: "1",
       operation_id: safeId(input.operation_id, "Job submission operation_id"),
+      provider_attestation_id: attestationId(
+        input.provider_attestation_id,
+        "Job submission provider_attestation_id",
+      ),
       inputs: artifactInputs(input.inputs, "Job submission inputs"),
     };
   } catch (cause) {
@@ -462,6 +553,30 @@ export function decodeDroneJobSubmission(value: unknown): DroneJobSubmission {
     }
     throw cause;
   }
+}
+
+function decodeProviderAttestationSummary(value: unknown): DroneProviderAttestationSummary {
+  const summary = object(value, "Provider attestation summary");
+  if (summary.profile !== APPLE_NATIVE_ATTESTATION_PROFILE) {
+    throw invalidResponse("Provider attestation profile is invalid.");
+  }
+  const issuer = string(summary.issuer, "Provider attestation issuer", 128);
+  if (containsControl(issuer)) {
+    throw invalidResponse("Provider attestation issuer is invalid.");
+  }
+  const issuedAt = timestamp(summary.issued_at, "Provider attestation issued_at");
+  const expiresAt = timestamp(summary.expires_at, "Provider attestation expires_at");
+  if (expiresAt <= issuedAt) {
+    throw invalidResponse("Provider attestation validity interval is invalid.");
+  }
+  return {
+    attestation_id: attestationId(summary.attestation_id, "Provider attestation attestation_id"),
+    profile: APPLE_NATIVE_ATTESTATION_PROFILE,
+    key_id: attestationKeyId(summary.key_id, "Provider attestation key_id"),
+    issuer,
+    issued_at: issuedAt,
+    expires_at: expiresAt,
+  };
 }
 
 export function decodeDroneProviderStatus(value: unknown): DroneProviderStatus {
@@ -476,7 +591,16 @@ export function decodeDroneProviderStatus(value: unknown): DroneProviderStatus {
     status.mutations_available,
     "Provider status mutations_available",
   );
-  if ((enabled && !installed) || (mutationsAvailable && !enabled)) {
+  const attested = boolean(status.attested, "Provider status attested");
+  const attestation =
+    status.attestation === undefined
+      ? undefined
+      : decodeProviderAttestationSummary(status.attestation);
+  if (
+    (enabled && !installed) ||
+    attested !== (attestation !== undefined) ||
+    (mutationsAvailable && (!enabled || !attested))
+  ) {
     throw invalidResponse("Provider availability flags are inconsistent.");
   }
   return {
@@ -485,6 +609,8 @@ export function decodeDroneProviderStatus(value: unknown): DroneProviderStatus {
     installed,
     enabled,
     mutations_available: mutationsAvailable,
+    attested,
+    ...(attestation === undefined ? {} : { attestation }),
     reason,
     isolation:
       status.isolation === "lightweight_vm"
@@ -506,6 +632,93 @@ export function decodeDroneProviderStatuses(value: unknown): ReadonlyArray<Drone
   const statuses = value.map(decodeDroneProviderStatus);
   assertUnique(statuses, (status) => status.provider_id, "Provider status response");
   return statuses;
+}
+
+export function decodeDroneExecutionAttestation(value: unknown): DroneExecutionAttestation {
+  const evidence = object(value, "Execution attestation");
+  exactKeys(
+    evidence,
+    [
+      "schema_version",
+      "profile",
+      "provider_attestation_id",
+      "challenge",
+      "container_id",
+      "image_reference",
+      "backend",
+      "isolation",
+      "guest_os",
+      "network_mode",
+      "ephemeral_vm",
+      "read_only_root",
+      "input_disk_read_only",
+      "output_disk_bounded",
+      "host_directory_sharing",
+      "socket_sharing",
+      "nested_virtualization",
+      "non_root_required",
+      "no_new_privileges",
+      "capabilities",
+    ],
+    "Execution attestation",
+  );
+  if (
+    evidence.schema_version !== "1" ||
+    evidence.profile !== APPLE_NATIVE_ATTESTATION_PROFILE ||
+    evidence.backend !== "apple_containerization" ||
+    evidence.isolation !== "lightweight_vm" ||
+    evidence.guest_os !== "linux" ||
+    evidence.network_mode !== "none" ||
+    evidence.ephemeral_vm !== true ||
+    evidence.read_only_root !== true ||
+    evidence.input_disk_read_only !== true ||
+    evidence.output_disk_bounded !== true ||
+    evidence.host_directory_sharing !== false ||
+    evidence.socket_sharing !== false ||
+    evidence.nested_virtualization !== false ||
+    evidence.non_root_required !== true ||
+    evidence.no_new_privileges !== true ||
+    evidence.capabilities !== "none"
+  ) {
+    throw invalidResponse("Execution attestation isolation claims are invalid.");
+  }
+  if (typeof evidence.challenge !== "string" || !ATTESTATION_CHALLENGE.test(evidence.challenge)) {
+    throw invalidResponse("Execution attestation challenge is invalid.");
+  }
+  if (typeof evidence.container_id !== "string" || !CONTAINER_ID.test(evidence.container_id)) {
+    throw invalidResponse("Execution attestation container_id is invalid.");
+  }
+  if (
+    typeof evidence.image_reference !== "string" ||
+    !IMAGE_DIGEST.test(evidence.image_reference)
+  ) {
+    throw invalidResponse("Execution attestation image_reference is invalid.");
+  }
+  return {
+    schema_version: "1",
+    profile: APPLE_NATIVE_ATTESTATION_PROFILE,
+    provider_attestation_id: attestationId(
+      evidence.provider_attestation_id,
+      "Execution attestation provider_attestation_id",
+    ),
+    challenge: evidence.challenge,
+    container_id: evidence.container_id,
+    image_reference: evidence.image_reference,
+    backend: "apple_containerization",
+    isolation: "lightweight_vm",
+    guest_os: "linux",
+    network_mode: "none",
+    ephemeral_vm: true,
+    read_only_root: true,
+    input_disk_read_only: true,
+    output_disk_bounded: true,
+    host_directory_sharing: false,
+    socket_sharing: false,
+    nested_virtualization: false,
+    non_root_required: true,
+    no_new_privileges: true,
+    capabilities: "none",
+  };
 }
 
 export function decodeDronePublicOperation(value: unknown): DronePublicOperation {
@@ -611,7 +824,7 @@ export function decodeDroneJob(value: unknown): DroneJob {
   const optionalTimestamp = (key: "started_at" | "finished_at"): string | undefined =>
     job[key] === undefined ? undefined : timestamp(job[key], `Job ${key}`);
   const optionalArtifact = (
-    key: "stdout_artifact_id" | "stderr_artifact_id",
+    key: "stdout_artifact_id" | "stderr_artifact_id" | "execution_attestation_artifact_id",
   ): string | undefined =>
     job[key] === undefined ? undefined : artifactId(job[key], `Job ${key}`);
   const optionalErrorCode = (): string | undefined => {
@@ -625,6 +838,7 @@ export function decodeDroneJob(value: unknown): DroneJob {
   const finishedAt = optionalTimestamp("finished_at");
   const stdoutArtifactId = optionalArtifact("stdout_artifact_id");
   const stderrArtifactId = optionalArtifact("stderr_artifact_id");
+  const executionAttestationArtifactId = optionalArtifact("execution_attestation_artifact_id");
   const errorCode = optionalErrorCode();
   const exitCode =
     job.exit_code === undefined
@@ -645,6 +859,10 @@ export function decodeDroneJob(value: unknown): DroneJob {
     job_id: job.job_id,
     operation_id: safeId(job.operation_id, "Job operation_id"),
     provider_id: providerId(job.provider_id, "Job provider_id"),
+    provider_attestation_id: attestationId(
+      job.provider_attestation_id,
+      "Job provider_attestation_id",
+    ),
     status: job.status as DroneJobStatus,
     inputs: artifactInputs(job.inputs, "Job inputs"),
     outputs,
@@ -655,6 +873,9 @@ export function decodeDroneJob(value: unknown): DroneJob {
     ...(timedOut === undefined ? {} : { timed_out: timedOut }),
     ...(stdoutArtifactId === undefined ? {} : { stdout_artifact_id: stdoutArtifactId }),
     ...(stderrArtifactId === undefined ? {} : { stderr_artifact_id: stderrArtifactId }),
+    ...(executionAttestationArtifactId === undefined
+      ? {}
+      : { execution_attestation_artifact_id: executionAttestationArtifactId }),
     ...(errorCode === undefined ? {} : { error_code: errorCode }),
   };
   validateJobState(decoded);

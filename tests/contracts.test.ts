@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   decodeDroneArtifactMetadata,
+  decodeDroneExecutionAttestation,
   decodeDroneJob,
   decodeDroneJobs,
   decodeDroneJobSubmission,
   decodeDroneProviderStatuses,
   decodeDronePublicOperations,
   DRONE_V1_LIMITS,
+  APPLE_NATIVE_ATTESTATION_PROFILE,
   DroneClientError,
   isDroneArtifactId,
   isDroneJobId,
@@ -17,6 +19,7 @@ import {
   ARTIFACT_ID,
   artifactMetadata,
   JOB_ID,
+  PROVIDER_ATTESTATION_ID,
   job,
   providerStatus,
   publicOperation,
@@ -28,22 +31,40 @@ describe("Drone public contracts", () => {
       decodeDroneJobSubmission({
         schema_version: "1",
         operation_id: "pe.static_snapshot",
+        provider_attestation_id: PROVIDER_ATTESTATION_ID,
         inputs: { sample: ARTIFACT_ID },
         ignored_client_field: true,
       }),
     ).toEqual({
       schema_version: "1",
       operation_id: "pe.static_snapshot",
+      provider_attestation_id: PROVIDER_ATTESTATION_ID,
       inputs: { sample: ARTIFACT_ID },
     });
 
     for (const input of [
-      { schema_version: "2", operation_id: "pe.static_snapshot", inputs: {} },
-      { schema_version: "1", operation_id: "../escape", inputs: {} },
-      { schema_version: "1", operation_id: "pe.static_snapshot", inputs: { "../x": ARTIFACT_ID } },
+      {
+        schema_version: "2",
+        operation_id: "pe.static_snapshot",
+        provider_attestation_id: PROVIDER_ATTESTATION_ID,
+        inputs: {},
+      },
+      {
+        schema_version: "1",
+        operation_id: "../escape",
+        provider_attestation_id: PROVIDER_ATTESTATION_ID,
+        inputs: {},
+      },
       {
         schema_version: "1",
         operation_id: "pe.static_snapshot",
+        provider_attestation_id: PROVIDER_ATTESTATION_ID,
+        inputs: { "../x": ARTIFACT_ID },
+      },
+      {
+        schema_version: "1",
+        operation_id: "pe.static_snapshot",
+        provider_attestation_id: PROVIDER_ATTESTATION_ID,
         inputs: { sample: "mutable-file-name" },
       },
     ]) {
@@ -69,8 +90,56 @@ describe("Drone public contracts", () => {
       decodeDroneProviderStatuses([providerStatus({ enabled: false, mutations_available: true })]),
     ).toThrowError(/inconsistent/iu);
     expect(() =>
+      decodeDroneProviderStatuses([
+        providerStatus({ attested: false, mutations_available: false }),
+      ]),
+    ).toThrowError(/inconsistent/iu);
+    expect(() =>
+      decodeDroneProviderStatuses([
+        providerStatus({
+          mutations_available: false,
+          attestation: {
+            ...providerStatus().attestation!,
+            expires_at: "2026-07-17T08:00:00.000Z",
+          },
+        }),
+      ]),
+    ).toThrowError(/validity interval/iu);
+    expect(() =>
       decodeDroneProviderStatuses([{ ...providerStatus(), guest_os: ["linux", "linux"] }]),
     ).toThrow();
+  });
+
+  it("strictly decodes no-network per-job VM execution evidence", () => {
+    const evidence = {
+      schema_version: "1",
+      profile: APPLE_NATIVE_ATTESTATION_PROFILE,
+      provider_attestation_id: PROVIDER_ATTESTATION_ID,
+      challenge: "e".repeat(64),
+      container_id: `drone-${"f".repeat(24)}`,
+      image_reference: `registry.example/drone/tool@sha256:${"a".repeat(64)}`,
+      backend: "apple_containerization",
+      isolation: "lightweight_vm",
+      guest_os: "linux",
+      network_mode: "none",
+      ephemeral_vm: true,
+      read_only_root: true,
+      input_disk_read_only: true,
+      output_disk_bounded: true,
+      host_directory_sharing: false,
+      socket_sharing: false,
+      nested_virtualization: false,
+      non_root_required: true,
+      no_new_privileges: true,
+      capabilities: "none",
+    };
+    expect(decodeDroneExecutionAttestation(evidence)).toEqual(evidence);
+    expect(() =>
+      decodeDroneExecutionAttestation({ ...evidence, network_mode: "bridge" }),
+    ).toThrowError(/isolation claims/iu);
+    expect(() =>
+      decodeDroneExecutionAttestation({ ...evidence, undocumented_claim: true }),
+    ).toThrowError(/strict schema/iu);
   });
 
   it("decodes public operations and enforces bounded declared structures", () => {
@@ -208,6 +277,7 @@ describe("Drone public contracts", () => {
       timed_out: false,
       stdout_artifact_id: ARTIFACT_ID,
       stderr_artifact_id: ARTIFACT_ID,
+      execution_attestation_artifact_id: ARTIFACT_ID,
       error_code: "SANDBOX_EXIT_NONZERO",
     });
     expect(decodeDroneJob(terminal)).toEqual(terminal);
@@ -261,6 +331,11 @@ describe("Drone public contracts", () => {
       { ...job({ status: "failed" }), error_code: undefined },
       job({ status: "failed", exit_code: 0, timed_out: false }),
       job({ status: "cancelled", exit_code: 1, timed_out: false }),
+      { ...job({ status: "succeeded" }), execution_attestation_artifact_id: undefined },
+      {
+        ...job({ status: "failed" }),
+        execution_attestation_artifact_id: undefined,
+      },
       job({
         status: "interrupted",
         outputs: [

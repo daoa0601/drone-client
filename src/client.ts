@@ -419,6 +419,7 @@ export class DroneClient {
     if (
       job.status !== "queued" ||
       job.operation_id !== submission.operation_id ||
+      job.provider_attestation_id !== submission.provider_attestation_id ||
       !sameArtifactInputs(job.inputs, submission.inputs)
     ) {
       throw invalidCorrelation("Drone job response does not match the submitted job.");

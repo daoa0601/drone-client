@@ -65,6 +65,7 @@ try {
       "const submission: DroneJobSubmission = {",
       '  schema_version: "1",',
       '  operation_id: "test.inspect",',
+      '  provider_attestation_id: `attestation.sha256.${"b".repeat(64)}`,',
       '  inputs: { sample: `sha256_${"a".repeat(64)}` },',
       "};",
       'const client = new DroneClient({ baseUrl: "http://127.0.0.1:8090" });',
