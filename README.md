@@ -1,9 +1,8 @@
 # `@agentic-orch/drone-client`
 
-`@agentic-orch/drone-client` is the supported Node.js client and public v1 wire-contract package for the
-Drone sandbox service. It has no runtime dependencies on Drone, Effect, or a server framework.
-
-> Status: private local workspace module; npm publication is intentionally disabled.
+`@agentic-orch/drone-client` is the supported Node.js client and the single definition of the public
+v1 wire contract for the Drone sandbox service. It has no runtime dependencies on Drone, Effect, or a
+server framework.
 
 The package owns:
 
@@ -14,15 +13,19 @@ The package owns:
 - hard deadlines that do not rely on transport abort compliance;
 - bounded, uncompressed response handling with exact `Content-Length` reconciliation;
 - request/response correlation and sha256 verification of downloaded artifacts.
-- signed-provider admission fields and strict per-job VM execution-attestation decoding.
+- signed-provider admission fields and strict per-job VM execution-attestation decoding;
+- the protocol, provider, and attestation-profile constants, v1 limits, and identifier predicates
+  (`isDroneOperationId`, `isDroneArtifactId`, `isDroneAttestationId`, and related guards).
 
-Drone's provider implementations, operation registry, stores, service, and HTTP server remain
-server internals and are intentionally not exported here.
+The Drone server builds its own admission and persistence checks on those constants, types, and
+predicates, so a wire-contract change is made here once. Drone's provider implementations,
+operation registry, stores, service, and HTTP server remain server internals and are intentionally
+not exported here.
 
 ## Usage
 
 ```ts
-import { DroneClient } from "@agentic-orch/drone-client";
+import { APPLE_NATIVE_PROVIDER_ID, DroneClient } from "@agentic-orch/drone-client";
 
 const drone = new DroneClient({
   baseUrl: "http://127.0.0.1:8090",
@@ -31,7 +34,7 @@ const drone = new DroneClient({
 });
 
 const providers = await drone.providers();
-const apple = providers.find((provider) => provider.provider_id === "apple_native");
+const apple = providers.find((provider) => provider.provider_id === APPLE_NATIVE_PROVIDER_ID);
 if (apple?.mutations_available !== true || apple.attestation === undefined) {
   throw new Error("No independently attested Drone provider is ready");
 }
@@ -81,24 +84,22 @@ ambiguous result. A missing `Content-Length` is allowed, but the streaming byte 
 Runtime decoders enforce the frozen public v1 limits exported as `DRONE_V1_LIMITS`, including
 operation resources, artifact/output sizes, collection bounds, unique public identifiers and slot
 names, canonical timestamps, attestation identities, and valid job-state/evidence combinations.
-These are wire-contract constants, not imports from Drone's server implementation.
+They are the contract's source of truth; the Drone server imports the same values.
 
 Plain HTTP is accepted only for `127.0.0.1`, `::1`, and `localhost`. Non-local endpoints must use
 HTTPS. Base URLs with credentials, paths, queries, or fragments are rejected.
 
-## Development and local reuse
+## Development
+
+This repository has no sibling dependencies. Consumers declare
+`"@agentic-orch/drone-client": "workspace:*"` and list `../drone-client` in their
+`pnpm-workspace.yaml`; installing the consumer builds `dist/` through this package's `prepare`
+script. See the catalog README for the sibling layout.
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm check
-pnpm pack:check
 ```
 
-Consumers declare `@agentic-orch/drone-client: "workspace:*"` and include `../drone-client` in their
-pnpm workspace. Templar's lock records `link:../drone-client`, so a missing or misnamed sibling fails
-installation instead of falling back to a registry package. `pnpm pack:check` remains a useful
-clean-room export test even though the module is private.
-
-Version `0.2.x` is the first client line that requires attested-provider and execution-evidence
-fields from Drone. The HTTP resource path remains v1 because the server response is additive for
-tolerant 0.1 clients; security-sensitive consumers should upgrade client and server together.
+After editing `src/` while a consumer is already installed, run `pnpm build` here; a no-op consumer
+install does not rerun `prepare`.

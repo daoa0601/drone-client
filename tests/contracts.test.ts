@@ -10,9 +10,18 @@ import {
   decodeDronePublicOperations,
   DRONE_V1_LIMITS,
   APPLE_NATIVE_ATTESTATION_PROFILE,
+  APPLE_NATIVE_PROVIDER_ID,
   DroneClientError,
   isDroneArtifactId,
+  isDroneAttestationChallenge,
+  isDroneAttestationId,
+  isDroneAttestationKeyId,
+  isDroneContainerId,
+  isDroneImageReference,
   isDroneJobId,
+  isDroneMediaType,
+  isDroneOperationId,
+  isDroneSlotName,
   normalizeDroneMediaType,
 } from "../src/index.js";
 import {
@@ -378,5 +387,27 @@ describe("Drone public contracts", () => {
       "application/octet-stream",
     );
     expect(() => normalizeDroneMediaType("application/json")).toThrowError(DroneClientError);
+  });
+
+  it("exposes the public v1 identifier syntax shared with the Drone server", () => {
+    expect(APPLE_NATIVE_PROVIDER_ID).toBe("apple_native");
+    expect(isDroneOperationId("pe.static_snapshot")).toBe(true);
+    expect(isDroneOperationId("PE.snapshot")).toBe(false);
+    expect(isDroneOperationId(` pe.static_snapshot`)).toBe(false);
+    expect(isDroneSlotName("sample-input")).toBe(true);
+    expect(isDroneSlotName("sample.input")).toBe(false);
+    expect(isDroneAttestationId(PROVIDER_ATTESTATION_ID)).toBe(true);
+    expect(isDroneAttestationId(`attestation.sha256.${"A".repeat(64)}`)).toBe(false);
+    expect(isDroneAttestationKeyId(`ed25519.sha256.${"c".repeat(64)}`)).toBe(true);
+    expect(isDroneAttestationKeyId(`rsa.sha256.${"c".repeat(64)}`)).toBe(false);
+    expect(isDroneAttestationChallenge("d".repeat(64))).toBe(true);
+    expect(isDroneAttestationChallenge("d".repeat(63))).toBe(false);
+    expect(isDroneContainerId(`drone-${"e".repeat(24)}`)).toBe(true);
+    expect(isDroneContainerId(`drone-${"e".repeat(23)}`)).toBe(false);
+    expect(isDroneImageReference(`registry.example/tools@sha256:${"f".repeat(64)}`)).toBe(true);
+    expect(isDroneImageReference("registry.example/tools:latest")).toBe(false);
+    expect(isDroneMediaType("application/vnd.microsoft.portable-executable")).toBe(true);
+    expect(isDroneMediaType("Application/Octet-Stream")).toBe(false);
+    expect(isDroneMediaType("application/octet-stream; charset=binary")).toBe(false);
   });
 });
