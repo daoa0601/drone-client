@@ -1,11 +1,12 @@
 import { invalidRequest, invalidResponse } from "./errors.js";
 
 export const DRONE_PROTOCOL_VERSION = "1" as const;
+export const APPLE_NATIVE_PROVIDER_ID = "apple_native" as const;
 export const APPLE_NATIVE_ATTESTATION_PROFILE = "apple_native_no_network_vm_v1" as const;
 
 const MIB = 1024 * 1024;
 
-/** Frozen limits copied from the public Drone v1 wire contract. */
+/** Frozen public Drone v1 wire-contract limits. The Drone server enforces these same values. */
 export const DRONE_V1_LIMITS = Object.freeze({
   maxProviders: 16,
   maxOperations: 128,
@@ -522,6 +523,40 @@ export function isDroneArtifactId(value: string): boolean {
 
 export function isDroneJobId(value: string): boolean {
   return JOB_ID.test(value);
+}
+
+export function isDroneOperationId(value: string): boolean {
+  return SAFE_ID.test(value);
+}
+
+export function isDroneSlotName(value: string): boolean {
+  return SAFE_SLOT.test(value);
+}
+
+export function isDroneAttestationId(value: string): boolean {
+  return ATTESTATION_ID.test(value);
+}
+
+export function isDroneAttestationKeyId(value: string): boolean {
+  return ATTESTATION_KEY_ID.test(value);
+}
+
+export function isDroneAttestationChallenge(value: string): boolean {
+  return ATTESTATION_CHALLENGE.test(value);
+}
+
+export function isDroneContainerId(value: string): boolean {
+  return CONTAINER_ID.test(value);
+}
+
+/** True for an OCI reference pinned to an exact sha256 digest. */
+export function isDroneImageReference(value: string): boolean {
+  return IMAGE_DIGEST.test(value);
+}
+
+/** True for a canonical lowercase `type/subtype` without parameters. */
+export function isDroneMediaType(value: string): boolean {
+  return MEDIA_TYPE.test(value);
 }
 
 export function normalizeDroneMediaType(value: string): string {

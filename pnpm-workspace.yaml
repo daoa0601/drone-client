@@ -1,2 +1,5 @@
+engineStrict: true
+pmOnFail: error
+
 onlyBuiltDependencies:
   - esbuild
